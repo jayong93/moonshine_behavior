@@ -34,7 +34,7 @@ fn main() {
 }
 
 // Define Bird behavior as an enum with all of its possible states.
-#[derive(Component, Default, Debug, Reflect)]
+#[derive(Component, Default, Clone, Copy, Debug, Reflect)]
 #[reflect(Component)]
 enum Bird {
     #[default]

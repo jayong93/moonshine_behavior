@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::{transition, Behavior, BehaviorBundle, BehaviorPlugin, Next, Previous, Reset};
 
-#[derive(Component, Default, Debug, PartialEq, Eq, Reflect)]
+#[derive(Component, Default, Debug, Clone, Copy, PartialEq, Eq, Reflect)]
 enum B {
     #[default]
     S0,

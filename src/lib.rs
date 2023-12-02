@@ -14,8 +14,7 @@ use bevy_utils::tracing::{debug, error, warn};
 pub mod prelude {
     pub use crate::{
         transition, BehaviorPlugin, {Behavior, BehaviorBundle}, {BehaviorMut, BehaviorRef},
-        {Paused, Resumed, Started, Stopped},
-        {PausedEvent, ResumedEvent, StartedEvent, StoppedEvent},
+        {Transited, TransitionEvent}
     };
 }
 
@@ -33,10 +32,7 @@ impl<B: Behavior> Default for BehaviorPlugin<B> {
 
 impl<B: Behavior + FromReflect + TypePath> Plugin for BehaviorPlugin<B> {
     fn build(&self, app: &mut App) {
-        app.add_event::<StartedEvent<B>>()
-            .add_event::<PausedEvent<B>>()
-            .add_event::<ResumedEvent<B>>()
-            .add_event::<StoppedEvent<B>>()
+        app.add_event::<TransitionEvent<B>>()
             .register_type::<Memory<B>>()
             .register_type::<Vec<B>>()
             .register_type::<Transition<B>>();
@@ -311,6 +307,7 @@ impl<B: Behavior> BorrowMut<B> for BehaviorMutItem<'_, B> {
 #[reflect(Component)]
 pub struct Memory<B: Behavior>(Vec<B>);
 
+#[allow(dead_code)]
 impl<B: Behavior> Memory<B> {
     fn previous(&self) -> Option<&B> {
         self.0.last()
@@ -326,6 +323,10 @@ impl<B: Behavior> Memory<B> {
 
     fn pop(&mut self) -> Option<B> {
         self.0.pop()
+    }
+
+    fn reset(&mut self) {
+        self.0.truncate(1)
     }
 }
 
@@ -362,42 +363,29 @@ impl<B: Behavior> Transition<B> {
 #[doc(hidden)]
 #[derive(SystemParam)]
 pub struct Events<'w, B: Behavior> {
-    started: EventWriter<'w, StartedEvent<B>>,
-    resumed: EventWriter<'w, ResumedEvent<B>>,
-    paused: EventWriter<'w, PausedEvent<B>>,
-    stopped: EventWriter<'w, StoppedEvent<B>>,
+    transited: EventWriter<'w, TransitionEvent<B>>,
 }
 
 impl<'w, B: Behavior> Events<'w, B> {
-    fn send_started(&mut self, entity: Entity) {
-        self.started.send(StartedEvent::new(entity));
-    }
-
-    fn send_resumed(&mut self, entity: Entity) {
-        self.resumed.send(ResumedEvent::new(entity));
-    }
-
-    fn send_paused(&mut self, entity: Entity) {
-        self.paused.send(PausedEvent::new(entity));
-    }
-
-    fn send_stopped(&mut self, entity: Entity, behavior: B) {
-        self.stopped.send(StoppedEvent::new(entity, behavior));
+    fn send(&mut self, entity: Entity, before: B, after: B) {
+        self.transited.send(TransitionEvent::new(entity, before, after));
     }
 }
 
 /// An event emitted when a [`Behavior`] is started.
 #[derive(Event)]
-pub struct StartedEvent<B: Behavior> {
+pub struct TransitionEvent<B> {
     entity: Entity,
-    marker: PhantomData<B>,
+    before: B,
+    after: B,
 }
 
-impl<B: Behavior> StartedEvent<B> {
-    fn new(entity: Entity) -> Self {
+impl<B: Behavior> TransitionEvent<B> {
+    fn new(entity: Entity, before: B, after: B) -> Self {
         Self {
             entity,
-            marker: PhantomData,
+            before,
+            after
         }
     }
 
@@ -405,88 +393,24 @@ impl<B: Behavior> StartedEvent<B> {
     pub fn entity(&self) -> Entity {
         self.entity
     }
-}
 
-/// An event emitted when a [`Behavior`] is resumed.
-#[derive(Event)]
-pub struct ResumedEvent<B: Behavior> {
-    entity: Entity,
-    marker: PhantomData<B>,
-}
-
-impl<B: Behavior> ResumedEvent<B> {
-    fn new(entity: Entity) -> Self {
-        Self {
-            entity,
-            marker: PhantomData,
-        }
+    /// Returns the state before this transition.
+    pub fn before(&self) -> &B {
+        &self.before
     }
 
-    /// Returns the [`Entity`] that resumed the [`Behavior`].
-    pub fn entity(&self) -> Entity {
-        self.entity
-    }
-}
-
-/// An event emitted when a [`Behavior`] is paused.
-#[derive(Event)]
-pub struct PausedEvent<B: Behavior> {
-    entity: Entity,
-    marker: PhantomData<B>,
-}
-
-impl<B: Behavior> PausedEvent<B> {
-    fn new(entity: Entity) -> Self {
-        Self {
-            entity,
-            marker: PhantomData,
-        }
-    }
-
-    /// Returns the [`Entity`] that paused the [`Behavior`].
-    pub fn entity(&self) -> Entity {
-        self.entity
-    }
-}
-
-/// An event emitted when a [`Behavior`] is stopped.
-#[derive(Event)]
-pub struct StoppedEvent<B: Behavior> {
-    entity: Entity,
-    behavior: B,
-}
-
-impl<B: Behavior> StoppedEvent<B> {
-    fn new(entity: Entity, behavior: B) -> Self {
-        Self { entity, behavior }
-    }
-
-    /// Returns the [`Entity`] that stopped the [`Behavior`].
-    pub fn entity(&self) -> Entity {
-        self.entity
-    }
-
-    /// Returns the [`Behavior`] that was stopped.
-    pub fn behavior(&self) -> &B {
-        &self.behavior
+    /// Returns the state after this transition.
+    pub fn after(&self) -> &B {
+        &self.after
     }
 }
 
 /// An [`EventReader`] for [`StartedEvent`]s.
-pub type Started<'w, 's, B> = EventReader<'w, 's, StartedEvent<B>>;
-
-/// An [`EventReader`] for [`ResumedEvent`]s.
-pub type Resumed<'w, 's, B> = EventReader<'w, 's, ResumedEvent<B>>;
-
-/// An [`EventReader`] for [`PausedEvent`]s.
-pub type Paused<'w, 's, B> = EventReader<'w, 's, PausedEvent<B>>;
-
-/// An [`EventReader`] for [`StoppedEvent`]s.
-pub type Stopped<'w, 's, B> = EventReader<'w, 's, StoppedEvent<B>>;
+pub type Transited<'w, 's, B> = EventReader<'w, 's, TransitionEvent<B>>;
 
 /// A [`System`] which triggers [`Behavior`] transitions.
 #[allow(clippy::type_complexity)]
-pub fn transition<B: Behavior>(
+pub fn transition<B: Behavior + Clone>(
     mut query: Query<(Entity, &mut B, &mut Memory<B>, &mut Transition<B>), Changed<Transition<B>>>,
     mut events: Events<B>,
 ) {
@@ -500,7 +424,7 @@ pub fn transition<B: Behavior>(
     }
 }
 
-fn push<B: Behavior>(
+fn push<B: Behavior + Clone>(
     entity: Entity,
     mut next: B,
     mut current: Mut<B>,
@@ -514,18 +438,15 @@ fn push<B: Behavior>(
             next
         };
         if behavior.is_resumable() {
-            events.send_paused(entity);
-            memory.push(behavior);
-        } else {
-            events.send_stopped(entity, behavior);
+            memory.push(behavior.clone());
         }
-        events.send_started(entity);
+        events.send(entity, behavior, (*current).clone());
     } else {
         warn!("{entity:?}: {:?} -> {next:?} is not allowed", *current);
     }
 }
 
-fn pop<B: Behavior>(
+fn pop<B: Behavior + Clone>(
     entity: Entity,
     mut current: Mut<B>,
     mut memory: Mut<Memory<B>>,
@@ -537,23 +458,19 @@ fn pop<B: Behavior>(
             swap(current.as_mut(), &mut next);
             next
         };
-        events.send_resumed(entity);
-        events.send_stopped(entity, behavior);
+        events.send(entity, behavior, (*current).clone());
     } else {
         error!("{entity:?}: {:?} -> None is not allowed", *current);
     }
 }
 
-fn reset<B: Behavior>(
+fn reset<B: Behavior + Clone>(
     entity: Entity,
     mut current: Mut<B>,
     mut memory: Mut<Memory<B>>,
     events: &mut Events<B>,
 ) {
-    while memory.len() > 1 {
-        let behavior = memory.pop().unwrap();
-        events.send_stopped(entity, behavior);
-    }
+    memory.reset();
 
     if let Some(mut next) = memory.pop() {
         debug!("{entity:?}: {:?} -> {next:?}", *current);
@@ -561,8 +478,7 @@ fn reset<B: Behavior>(
             swap(current.as_mut(), &mut next);
             next
         };
-        events.send_resumed(entity);
-        events.send_stopped(entity, behavior);
+        events.send(entity, behavior, (*current).clone());
     } else {
         warn!("{entity:?}: {:?} -> {:?} is redundant", *current, *current);
     }
